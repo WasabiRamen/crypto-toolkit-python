@@ -1,0 +1,237 @@
+# coding: utf-8
+# crypto_toolkit/key_management/symmetric.py
+
+# Standard Library
+import os
+import json
+from enum import Enum
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from collections import namedtuple
+from typing import Optional, Union
+
+# Third Party
+import aiofiles
+import aiofiles.os
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+# Utility
+from crypto_toolkit.utils.kid import generate_kid
+
+
+# ------------------------------------------------------------------------------
+
+class LoadType(Enum):
+    """
+    최초 키 로드, 생성/업데이트 할 장소
+    AWS KMS 같은 경우는 여기 추가 후 로직 구현
+    """
+    FILE = 'FILE'  # Required file_path argument when using
+
+
+@dataclass
+class FileLoadOptions:
+    """LoadType.FILE 사용 시 필요한 옵션"""
+    file_path: str
+
+
+# ------------------------------------------------------------------------------
+
+
+UsageMeta = namedtuple('UsageMeta', ['label', 'key_length_bytes'])
+
+
+class UsageType(Enum):
+    AES128 = UsageMeta('AES128', 16)           # 128 bits → 16 bytes
+    AES256 = UsageMeta('AES256', 32)           # 256 bits → 32 bytes
+    SHA256_HMAC = UsageMeta('SHA256_HMAC', 32) # 256 bits → 32 bytes
+    SHA512_HMAC = UsageMeta('SHA512_HMAC', 64) # 512 bits → 64 bytes
+
+
+# ------------------------------------------------------------------------------
+
+
+@dataclass
+class SymmetricKey:
+    """
+    대칭 키를 저장하거나 불러올 때 사용하는 데이터 클래스
+    """
+    kid: str
+    key: bytes
+    usage_type: UsageType
+    created_at: datetime
+    expires_at: datetime
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+
+def generate_symmetric_key(usage_type: UsageType, rotation_interval_days: int) -> SymmetricKey:
+    """
+    대칭 키 생성
+    """
+    key = os.urandom(usage_type.value.key_length_bytes)
+    now = datetime.now(timezone.utc)
+    kid = generate_kid(usage_type.value.label, now)
+
+    return SymmetricKey(
+        kid=kid,
+        key=key,
+        usage_type=usage_type,
+        created_at=now,
+        expires_at=now + timedelta(days=rotation_interval_days)
+    )
+
+
+async def load_symmetric_key(
+    usage_type: UsageType,
+    load_type: LoadType,
+    rotation_interval_days: int,
+    options: Optional[Union[FileLoadOptions]] = None,
+) -> SymmetricKey:
+    """
+    대칭 키를 로드하는 함수
+    """
+    if not isinstance(load_type, LoadType):
+        raise ValueError("load_type must be an instance of LoadType Enum")
+
+    # 다른 로드 방식은, elif 문 추가로 구현하면 됨.
+    if load_type == LoadType.FILE:
+        if not isinstance(options, FileLoadOptions):
+            raise TypeError("For FILE load_type, options must be a FileLoadOptions instance")
+
+        # File Path 옵션 검증
+        file_path = options.file_path
+        if not file_path:
+            raise ValueError("file_path is required when load_type is FILE")
+        if not file_path.endswith('.json'):
+            raise ValueError("file_path must point to a .json file")
+
+        # 폴더 없으면 생성
+        if not await aiofiles.os.path.exists(file_path):
+            dir_path = os.path.dirname(file_path)
+            if not await aiofiles.os.path.exists(dir_path):
+                await aiofiles.os.makedirs(dir_path)
+
+            new_key = generate_symmetric_key(usage_type, rotation_interval_days)
+            await save_symmetric_key(new_key, LoadType.FILE, options=options)
+            return new_key
+
+        # Json 형식으로 파일에서 SymmetricKey 객체 로드
+        async with aiofiles.open(file_path, 'r') as f:
+            content = await f.read()
+            key_data = json.loads(content)
+
+        # 파일 존재하나 키 데이터 불일치
+        required_fields = ['kid', 'key', 'usage_type', 'created_at', 'expires_at']
+        if not all(field in key_data for field in required_fields):
+            raise ValueError("Invalid key data in file")
+
+        # datetime 로드 후 UTC 타임존 설정 (없으면 추가)
+        created_at = datetime.fromisoformat(key_data['created_at'])
+        expires_at = datetime.fromisoformat(key_data['expires_at'])
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        return SymmetricKey(
+            kid=key_data['kid'],
+            key=bytes.fromhex(key_data['key']),
+            usage_type=UsageType[key_data['usage_type']],
+            created_at=created_at,
+            expires_at=expires_at
+        )
+
+
+async def save_symmetric_key(
+    key: SymmetricKey,
+    load_type: LoadType,
+    options: Optional[Union[FileLoadOptions]] = None,
+    ) -> None:
+    """
+    대칭 키 저장
+    """
+    if not isinstance(load_type, LoadType):
+        raise ValueError("load_type must be an instance of LoadType Enum")
+
+    if load_type == LoadType.FILE:
+        if not isinstance(options, FileLoadOptions):
+            raise TypeError("For FILE load_type, options must be a FileLoadOptions instance")
+
+        # File Path 옵션 검증
+        file_path = options.file_path
+        if not file_path:
+            raise ValueError("file_path is required when load_type is FILE")
+        if not file_path.endswith('.json'):
+            raise ValueError("file_path must point to a .json file")
+        if not key:
+            raise ValueError("key is required to save the symmetric key")
+
+        key_data = {
+            'kid': key.kid,
+            'key': key.key.hex(),
+            'usage_type': key.usage_type.name,
+            'created_at': key.created_at.isoformat(),
+            'expires_at': key.expires_at.isoformat()
+        }
+
+        async with aiofiles.open(file_path, 'w') as f:
+            await f.write(json.dumps(key_data))
+
+
+class SymmetricKeyRotator:
+    """
+    대칭 키 회전 클래스
+
+    kwargs:
+        - FILE: file_path (str) - 키를 저장/로드할 파일 경로 (usage_type이 FILE일 때만 필요)
+    """
+    def __init__(
+        self, usage_type: UsageType, rotation_interval_days: int, load_type: LoadType, options: Optional[Union[FileLoadOptions]] = None):
+        self.usage_type = usage_type
+        self.rotation_interval_days = rotation_interval_days
+        self.load_type = load_type
+        self.options = options
+        self.current_key: SymmetricKey | None = None
+
+        if self.load_type == LoadType.FILE:
+            if not isinstance(self.options, FileLoadOptions):
+                raise TypeError("For FILE load_type, options must be a FileLoadOptions instance")
+            self.key_file = self.options.file_path
+            if not self.key_file:
+                raise ValueError("file_path is required when load_type is FILE")
+
+    async def load_or_generate(self):
+        self.current_key = await load_symmetric_key(
+            self.usage_type,
+            self.load_type,
+            rotation_interval_days=self.rotation_interval_days,
+            options=self.options
+        )
+
+    async def rotate_key(self):
+        self.current_key = generate_symmetric_key(
+            self.usage_type,
+            self.rotation_interval_days
+        )
+        await save_symmetric_key(
+            self.current_key,
+            self.load_type,
+            options=self.options
+        )
+
+    async def start_scheduler(self):
+        self.scheduler = AsyncIOScheduler()
+        self.scheduler.add_job(
+            self.rotate_key,
+            'interval',
+            days=self.rotation_interval_days,
+            next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5)  # 테스트용
+        )
+        self.scheduler.start()
+
+    def stop_scheduler(self):
+        """스케줄러 정지"""
+        if hasattr(self, 'scheduler') and self.scheduler:
+            self.scheduler.shutdown()
