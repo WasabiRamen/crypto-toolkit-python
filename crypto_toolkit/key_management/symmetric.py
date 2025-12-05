@@ -184,11 +184,30 @@ class SymmetricKeyRotator:
     """
     대칭 키 회전 클래스
 
-    kwargs:
-        - FILE: file_path (str) - 키를 저장/로드할 파일 경로 (usage_type이 FILE일 때만 필요)
+    Lifespan에 추가하면 바로 사용 가능.
+
+    예제:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        rotator = SymmetricKeyRotator(
+            usage_type=UsageType.AES256,
+            rotation_interval_days=30,
+            load_type=LoadType.FILE,
+            options=FileLoadOptions(file_path="./keys/aes_key.json")
+        )
+        await rotator.init()
+        yield
+        rotator.stop_scheduler()
     """
     def __init__(
-        self, usage_type: UsageType, rotation_interval_days: int, load_type: LoadType, options: Optional[Union[FileLoadOptions]] = None):
+        self,
+        usage_type: UsageType,
+        rotation_interval_days: int,
+        load_type: LoadType,
+        options: Optional[Union[FileLoadOptions]] = None
+    ):
+        # 무거운 작업은 init()으로 옵김: 생성자는 빠르게 반환
+        self.scheduler = AsyncIOScheduler()
         self.usage_type = usage_type
         self.rotation_interval_days = rotation_interval_days
         self.load_type = load_type
@@ -202,15 +221,21 @@ class SymmetricKeyRotator:
             if not self.key_file:
                 raise ValueError("file_path is required when load_type is FILE")
 
-    async def load_or_generate(self):
+    async def init(self) -> None:
+        """
+        비동기 초기화: 파일 I/O 같은 블로킹 작업 수행.
+        lifespan에서 반드시 await rotator.init() 호출할 것.
+        """
         self.current_key = await load_symmetric_key(
             self.usage_type,
             self.load_type,
             rotation_interval_days=self.rotation_interval_days,
             options=self.options
         )
+        self._schedule_next_rotation()
 
-    async def rotate_key(self):
+    async def rotate_key(self) -> None:
+        """키 회전 실행"""
         self.current_key = generate_symmetric_key(
             self.usage_type,
             self.rotation_interval_days
@@ -220,18 +245,21 @@ class SymmetricKeyRotator:
             self.load_type,
             options=self.options
         )
+        # 회전 후 다음 회전 예약
+        self._schedule_next_rotation()
 
-    async def start_scheduler(self):
-        self.scheduler = AsyncIOScheduler()
+    def _schedule_next_rotation(self) -> None:
+        """다음 키 회전 예약"""
+        run_date = self.current_key.expires_at
         self.scheduler.add_job(
             self.rotate_key,
-            'interval',
-            days=self.rotation_interval_days,
-            next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5)  # 테스트용
+            "date",
+            run_date=run_date
         )
-        self.scheduler.start()
+        if not self.scheduler.running:
+            self.scheduler.start()
 
-    def stop_scheduler(self):
+    def stop_scheduler(self) -> None:
         """스케줄러 정지"""
         if hasattr(self, 'scheduler') and self.scheduler:
             self.scheduler.shutdown()

@@ -1,1 +1,6 @@
-aiofiles
+aiofiles==25.1.0
+APScheduler==3.11.1
+cffi==2.0.0
+cryptography==46.0.3
+pycparser==2.23
+tzlocal==5.3.1
