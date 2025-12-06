@@ -110,7 +110,7 @@ async def load_symmetric_key(
         # 폴더 없으면 생성
         if not await aiofiles.os.path.exists(file_path):
             dir_path = os.path.dirname(file_path)
-            if not await aiofiles.os.path.exists(dir_path):
+            if dir_path and not await aiofiles.os.path.exists(dir_path):
                 await aiofiles.os.makedirs(dir_path)
 
             new_key = generate_symmetric_key(usage_type, rotation_interval_days)
@@ -118,9 +118,14 @@ async def load_symmetric_key(
             return new_key
 
         # Json 형식으로 파일에서 SymmetricKey 객체 로드
-        async with aiofiles.open(file_path, 'r') as f:
-            content = await f.read()
-            key_data = json.loads(content)
+        try:
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                key_data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format in key file: {e}")
+        except Exception as e:
+            raise IOError(f"Failed to read key file: {e}")
 
         # 파일 존재하나 키 데이터 불일치
         required_fields = ['kid', 'key', 'usage_type', 'created_at', 'expires_at']
@@ -135,10 +140,15 @@ async def load_symmetric_key(
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
 
+        try:
+            usage_type_enum = UsageType[key_data['usage_type']]
+        except KeyError:
+            raise ValueError(f"Unknown usage_type: {key_data['usage_type']}")
+
         return SymmetricKey(
             kid=key_data['kid'],
             key=bytes.fromhex(key_data['key']),
-            usage_type=UsageType[key_data['usage_type']],
+            usage_type=usage_type_enum,
             created_at=created_at,
             expires_at=expires_at
         )
@@ -176,8 +186,8 @@ async def save_symmetric_key(
             'expires_at': key.expires_at.isoformat()
         }
 
-        async with aiofiles.open(file_path, 'w') as f:
-            await f.write(json.dumps(key_data))
+        async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(key_data, indent=2))
 
 
 class SymmetricKeyRotator:

@@ -135,7 +135,7 @@ async def load_asymmetric_key(
             # 디렉토리 생성
             for path in [private_key_path, public_key_path]:
                 dir_path = os.path.dirname(path)
-                if not await aiofiles.os.path.exists(dir_path):
+                if dir_path and not await aiofiles.os.path.exists(dir_path):
                     await aiofiles.os.makedirs(dir_path)
 
             new_key_pair = generate_asymmetric_key(key_size, rotation_interval_days)
@@ -143,14 +143,24 @@ async def load_asymmetric_key(
             return new_key_pair
 
         # Private Key 로드
-        async with aiofiles.open(private_key_path, 'r') as f:
-            content = await f.read()
-            private_data = json.loads(content)
+        try:
+            async with aiofiles.open(private_key_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                private_data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format in private key file: {e}")
+        except Exception as e:
+            raise IOError(f"Failed to read private key file: {e}")
 
         # Public Key 로드
-        async with aiofiles.open(public_key_path, 'r') as f:
-            content = await f.read()
-            public_data = json.loads(content)
+        try:
+            async with aiofiles.open(public_key_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                public_data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format in public key file: {e}")
+        except Exception as e:
+            raise IOError(f"Failed to read public key file: {e}")
 
         # 데이터 검증
         required_private_fields = ['kid', 'private_key', 'key_size', 'created_at', 'expires_at']
@@ -171,11 +181,16 @@ async def load_asymmetric_key(
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
 
+        try:
+            key_size_enum = RSAKeySize[private_data['key_size']]
+        except KeyError:
+            raise ValueError(f"Unknown key_size: {private_data['key_size']}")
+
         return AsymmetricKeyPair(
             kid=private_data['kid'],
             private_key=private_data['private_key'].encode('utf-8'),
             public_key=public_data['public_key'].encode('utf-8'),
-            key_size=RSAKeySize[private_data['key_size']],
+            key_size=key_size_enum,
             created_at=created_at,
             expires_at=expires_at
         )
