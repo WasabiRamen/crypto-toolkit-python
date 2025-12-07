@@ -16,6 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 
 # Utility
 from crypto_toolkit.utils.kid import generate_kid
@@ -53,22 +54,34 @@ class RSAKeySize(Enum):
 
 
 @dataclass
-class AsymmetricKeyPair:
+class KeyPairInfo:
     """
     비대칭 키 쌍을 저장하거나 불러올 때 사용하는 데이터 클래스
     """
     kid: str
-    private_key: bytes
-    public_key: bytes
+    private_key: RSAPrivateKey
+    public_key: RSAPublicKey
     key_size: RSAKeySize
     created_at: datetime
     expires_at: datetime
 
     def __getitem__(self, key):
         return getattr(self, key)
+    
+
+@dataclass
+class PublicKeyOnly:
+    """
+    비대칭 키 쌍을 저장하거나 불러올 때 사용하는 데이터 클래스
+    """
+    kid: str
+    public_key: RSAPublicKey
+
+    def __getitem__(self, key):
+        return getattr(self, key)
 
 
-def generate_asymmetric_key(key_size: RSAKeySize, rotation_interval_days: int) -> AsymmetricKeyPair:
+def generate_key(key_size: RSAKeySize, rotation_interval_days: int) -> KeyPairInfo:
     """
     비대칭 키 쌍 생성 (RSA)
     """
@@ -94,7 +107,7 @@ def generate_asymmetric_key(key_size: RSAKeySize, rotation_interval_days: int) -
     now = datetime.now(timezone.utc)
     kid = generate_kid(f'RSA{key_size.value}', now)
 
-    return AsymmetricKeyPair(
+    return KeyPairInfo(
         kid=kid,
         private_key=private_pem,
         public_key=public_pem,
@@ -104,12 +117,12 @@ def generate_asymmetric_key(key_size: RSAKeySize, rotation_interval_days: int) -
     )
 
 
-async def load_asymmetric_key(
+async def load_key(
     key_size: RSAKeySize,
     load_type: LoadType,
     rotation_interval_days: int,
     options: Optional[Union[FileLoadOptions]] = None,
-) -> AsymmetricKeyPair:
+) -> KeyPairInfo:
     """
     비대칭 키 쌍을 로드하는 함수
     """
@@ -138,8 +151,8 @@ async def load_asymmetric_key(
                 if dir_path and not await aiofiles.os.path.exists(dir_path):
                     await aiofiles.os.makedirs(dir_path)
 
-            new_key_pair = generate_asymmetric_key(key_size, rotation_interval_days)
-            await save_asymmetric_key(new_key_pair, LoadType.FILE, options=options)
+            new_key_pair = generate_key(key_size, rotation_interval_days)
+            await save_key(new_key_pair, LoadType.FILE, options=options)
             return new_key_pair
 
         # Private Key 로드
@@ -186,7 +199,7 @@ async def load_asymmetric_key(
         except KeyError:
             raise ValueError(f"Unknown key_size: {private_data['key_size']}")
 
-        return AsymmetricKeyPair(
+        return KeyPairInfo(
             kid=private_data['kid'],
             private_key=private_data['private_key'].encode('utf-8'),
             public_key=public_data['public_key'].encode('utf-8'),
@@ -196,8 +209,49 @@ async def load_asymmetric_key(
         )
 
 
-async def save_asymmetric_key(
-    key_pair: AsymmetricKeyPair,
+async def load_public_key_as_pem(
+    load_type: LoadType,
+    options: Optional[Union[FileLoadOptions]] = None,
+) -> PublicKeyOnly:
+    """
+    비대칭 공개 키만 로드하는 함수 / 타 서비스 연계용
+    """
+    if not isinstance(load_type, LoadType):
+        raise ValueError("load_type must be an instance of LoadType Enum")
+    if load_type == LoadType.FILE:
+        if not isinstance(options, FileLoadOptions):
+            raise TypeError("For FILE load_type, options must be a FileLoadOptions instance")
+
+        public_key_path = options.public_key_path
+        if not public_key_path or not public_key_path.endswith('.json'):
+            raise ValueError("public_key_path is required and must point to a .json file when load_type is FILE")
+
+        # Public Key 로드
+        try:
+            async with aiofiles.open(public_key_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                public_data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format in public key file: {e}")
+        except Exception as e:
+            raise IOError(f"Failed to read public key file: {e}")
+
+        if 'public_key' not in public_data:
+            raise ValueError("Invalid public key data in file")
+
+        required_public_fields = ['kid', 'public_key']
+
+        if not all(field in public_data for field in required_public_fields):
+            raise ValueError("Invalid public key data in file")
+
+        return PublicKeyOnly(
+            kid=public_data['kid'],
+            public_key=public_data['public_key'].encode('utf-8')
+        )
+
+
+async def save_key(
+    key_pair: KeyPairInfo,
     load_type: LoadType,
     options: Optional[Union[FileLoadOptions]] = None,
 ) -> None:
@@ -249,9 +303,9 @@ async def save_asymmetric_key(
             await f.write(json.dumps(public_data, indent=2))
 
 
-class AsymmetricKeyRotator:
+class KeyRotator:
     """
-    비대칭 키 회전 클래스
+    비대칭 키 회전 클래스 (FastAPI 전용)
 
     Lifespan에 추가하면 바로 사용 가능.
 
@@ -284,7 +338,9 @@ class AsymmetricKeyRotator:
         self.rotation_interval_days = rotation_interval_days
         self.load_type = load_type
         self.options = options
-        self.current_key_pair: AsymmetricKeyPair | None = None
+        self.current_key_pair: KeyPairInfo | None = None
+        self.public_key: RSAPublicKey | None = None
+        self.private_key: RSAPrivateKey | None = None
 
         if self.load_type == LoadType.FILE:
             if not isinstance(self.options, FileLoadOptions):
@@ -297,21 +353,46 @@ class AsymmetricKeyRotator:
         비동기 초기화: 파일 I/O 같은 블로킹 작업 수행.
         lifespan에서 반드시 await rotator.init() 호출할 것.
         """
-        self.current_key_pair = await load_asymmetric_key(
+        self.current_key_pair = await load_key(
             self.key_size,
             self.load_type,
             rotation_interval_days=self.rotation_interval_days,
             options=self.options
         )
+
+        # JWT 서명/검증용 키 객체 로드
+        self.private_key = serialization.load_pem_private_key(
+            self.current_key_pair.private_key,
+            password=None,
+            backend=default_backend()
+        )
+        
+        self.public_key = serialization.load_pem_public_key(
+            self.current_key_pair.public_key,
+            backend=default_backend()
+        )
         self._schedule_next_rotation()
 
     async def rotate_key(self) -> None:
         """키 회전 실행"""
-        self.current_key_pair = generate_asymmetric_key(
+        self.current_key_pair = generate_key(
             self.key_size,
             self.rotation_interval_days
         )
-        await save_asymmetric_key(
+
+        # JWT 서명/검증용 키 객체 로드
+        self.private_key = serialization.load_pem_private_key(
+            self.current_key_pair.private_key,
+            password=None,
+            backend=default_backend()
+        )
+        
+        self.public_key = serialization.load_pem_public_key(
+            self.current_key_pair.public_key,
+            backend=default_backend()
+        )
+
+        await save_key(
             self.current_key_pair,
             self.load_type,
             options=self.options

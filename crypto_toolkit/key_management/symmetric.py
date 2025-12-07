@@ -53,7 +53,7 @@ class UsageType(Enum):
 
 
 @dataclass
-class SymmetricKey:
+class KeyInfo:
     """
     대칭 키를 저장하거나 불러올 때 사용하는 데이터 클래스
     """
@@ -68,7 +68,7 @@ class SymmetricKey:
         return getattr(self, key)
 
 
-def generate_symmetric_key(usage_type: UsageType, rotation_interval_days: int) -> SymmetricKey:
+def generate_key(usage_type: UsageType, rotation_interval_days: int) -> KeyInfo:
     """
     대칭 키 생성
     """
@@ -83,7 +83,7 @@ def generate_symmetric_key(usage_type: UsageType, rotation_interval_days: int) -
     elif usage_type == UsageType.SHA512_HMAC:
         algorithm = 'sha512'
 
-    return SymmetricKey(
+    return KeyInfo(
         kid=kid,
         key=key,
         usage_type=usage_type,
@@ -93,12 +93,12 @@ def generate_symmetric_key(usage_type: UsageType, rotation_interval_days: int) -
     )
 
 
-async def load_symmetric_key(
+async def load_key(
     usage_type: UsageType,
     load_type: LoadType,
     rotation_interval_days: int,
     options: Optional[Union[FileLoadOptions]] = None,
-) -> SymmetricKey:
+) -> KeyInfo:
     """
     대칭 키를 로드하는 함수
     """
@@ -123,11 +123,11 @@ async def load_symmetric_key(
             if dir_path and not await aiofiles.os.path.exists(dir_path):
                 await aiofiles.os.makedirs(dir_path)
 
-            new_key = generate_symmetric_key(usage_type, rotation_interval_days)
+            new_key = generate_key(usage_type, rotation_interval_days)
             await save_symmetric_key(new_key, LoadType.FILE, options=options)
             return new_key
 
-        # Json 형식으로 파일에서 SymmetricKey 객체 로드
+        # Json 형식으로 파일에서 KeyInfo 객체 로드
         try:
             async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
                 content = await f.read()
@@ -155,7 +155,7 @@ async def load_symmetric_key(
         except KeyError:
             raise ValueError(f"Unknown usage_type: {key_data['usage_type']}")
 
-        return SymmetricKey(
+        return KeyInfo(
             kid=key_data['kid'],
             key=bytes.fromhex(key_data['key']),
             usage_type=usage_type_enum,
@@ -165,7 +165,7 @@ async def load_symmetric_key(
 
 
 async def save_symmetric_key(
-    key: SymmetricKey,
+    key: KeyInfo,
     load_type: LoadType,
     options: Optional[Union[FileLoadOptions]] = None,
     ) -> None:
@@ -200,7 +200,7 @@ async def save_symmetric_key(
             await f.write(json.dumps(key_data, indent=2))
 
 
-class SymmetricKeyRotator:
+class KeyRotator:
     """
     대칭 키 회전 클래스
 
@@ -232,7 +232,7 @@ class SymmetricKeyRotator:
         self.rotation_interval_days = rotation_interval_days
         self.load_type = load_type
         self.options = options
-        self.current_key: SymmetricKey | None = None
+        self.current_key: KeyInfo | None = None
 
         if self.load_type == LoadType.FILE:
             if not isinstance(self.options, FileLoadOptions):
@@ -246,7 +246,7 @@ class SymmetricKeyRotator:
         비동기 초기화: 파일 I/O 같은 블로킹 작업 수행.
         lifespan에서 반드시 await rotator.init() 호출할 것.
         """
-        self.current_key = await load_symmetric_key(
+        self.current_key = await load_key(
             self.usage_type,
             self.load_type,
             rotation_interval_days=self.rotation_interval_days,
@@ -256,7 +256,7 @@ class SymmetricKeyRotator:
 
     async def rotate_key(self) -> None:
         """키 회전 실행"""
-        self.current_key = generate_symmetric_key(
+        self.current_key = generate_key(
             self.usage_type,
             self.rotation_interval_days
         )

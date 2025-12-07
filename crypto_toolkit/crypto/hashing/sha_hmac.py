@@ -3,16 +3,16 @@ import hmac
 from typing import Union
 from dataclasses import dataclass
 
-from crypto_toolkit.key_management.symmetric import SymmetricKey
+from crypto_toolkit.key_management.symmetric import KeyInfo
 
 """
- Requires: key_management.symmetric.SymmetricKey
+ Requires: key_management.symmetric.KeyInfo
 """
 
 
 @dataclass
 class SHAHMACConfig:
-    key: SymmetricKey
+    key: KeyInfo
 
 
 class SHAHMACHasher:
