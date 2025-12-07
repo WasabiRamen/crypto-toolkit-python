@@ -3,7 +3,7 @@ import hmac
 from typing import Union
 from dataclasses import dataclass
 
-from key_management.symmetric import SymmetricKey
+from crypto_toolkit.key_management.symmetric import SymmetricKey
 
 """
  Requires: key_management.symmetric.SymmetricKey

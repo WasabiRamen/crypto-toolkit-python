@@ -81,7 +81,7 @@ class BcryptHasher:
         if self.__PEPPER:
             plain = self.__plain_with_pepper(plain)
         if not bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8')):
-            raise BcryptHasher.VerificationError("비밀번호가 일치하지 않습니다.")
+            raise BcryptVerificationError("비밀번호가 일치하지 않습니다.")
         
 
     def check_needs_rehash(self, stored_hash: bytes) -> bool:

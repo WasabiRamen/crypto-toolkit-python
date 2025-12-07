@@ -75,13 +75,21 @@ def generate_symmetric_key(usage_type: UsageType, rotation_interval_days: int) -
     key = os.urandom(usage_type.value.key_length_bytes)
     now = datetime.now(timezone.utc)
     kid = generate_kid(usage_type.value.label, now)
+    
+    # Set algorithm for HMAC keys
+    algorithm = None
+    if usage_type == UsageType.SHA256_HMAC:
+        algorithm = 'sha256'
+    elif usage_type == UsageType.SHA512_HMAC:
+        algorithm = 'sha512'
 
     return SymmetricKey(
         kid=kid,
         key=key,
         usage_type=usage_type,
         created_at=now,
-        expires_at=now + timedelta(days=rotation_interval_days)
+        expires_at=now + timedelta(days=rotation_interval_days),
+        algorithm=algorithm
     )
 
 
