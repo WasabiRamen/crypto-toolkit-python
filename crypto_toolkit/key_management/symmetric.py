@@ -46,6 +46,7 @@ class UsageType(Enum):
     AES256 = UsageMeta('AES256', 32)           # 256 bits → 32 bytes
     SHA256_HMAC = UsageMeta('SHA256_HMAC', 32) # 256 bits → 32 bytes
     SHA512_HMAC = UsageMeta('SHA512_HMAC', 64) # 512 bits → 64 bytes
+    PASSWORD_PEPPER = UsageMeta('PASSWORD_PEPPER', 32) # 256 bits → 32 bytes
 
 
 # ------------------------------------------------------------------------------
@@ -61,6 +62,7 @@ class SymmetricKey:
     usage_type: UsageType
     created_at: datetime
     expires_at: datetime
+    algorithm: Optional[str] = None
 
     def __getitem__(self, key):
         return getattr(self, key)
