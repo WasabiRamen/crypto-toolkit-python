@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-toolkit"
+version = "0.1.0"
+description = "A comprehensive Python cryptography toolkit for password hashing, symmetric/asymmetric encryption, and key management"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+    {name = "WasabiRamen"},
+]
+keywords = [
+    "cryptography",
+    "encryption",
+    "hashing",
+    "bcrypt",
+    "argon2",
+    "aes",
+    "hmac",
+    "password",
+    "security",
+    "key-management",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: FastAPI",
+]
+dependencies = [
+    "cryptography>=46.0.0",
+    "argon2-cffi>=25.0.0",
+    "bcrypt>=5.0.0",
+    "aiofiles>=25.0.0",
+    "APScheduler>=3.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.24.0",
+    "fastapi>=0.100.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/WasabiRamen/crypto-toolkit-python"
+Repository = "https://github.com/WasabiRamen/crypto-toolkit-python"
+Issues = "https://github.com/WasabiRamen/crypto-toolkit-python/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["crypto_toolkit*"]
+exclude = ["tests*", "*.egg-info"]
+
+[tool.setuptools.package-data]
+crypto_toolkit = ["py.typed"]
